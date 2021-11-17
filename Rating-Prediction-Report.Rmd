@@ -1,0 +1,365 @@
+---
+title: "Rating Prediction of Movielens Report"
+author: "Walaa Aburaad"
+date: "17‏/11‏/2021"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+**1. SUMMARY**
+
+**MovieLens** helps you find movies you will like. Rate movies to build a custom taste profile, then MovieLens recommends other movies for you to watch.
+
+The version of movielens here is just a small subset of a much larger dataset with millions of ratings. We will create our own recommendation system using all the tools we have learned throughout the courses in this Data Science Program courses.
+
+We will use the 10M version of the MovieLens dataset. We will train a machine learning algorithm using the inputs in one subset to predict movie ratings in the test set. And this project try to generate a model with enough predictive power to know the rating that a user will give to a movie.
+
+At this project, The movie rating predictions will be compared to the true ratings in the validation set (the final hold-out test set) using RMSE. 
+
+$$RMSE=\sqrt{\frac{1}{N}\sum_{u,i}(\hat{y}_u,_i-{y}_u,_i)^2}$$
+Where:
+N is the number of user-movie combinations
+${y}_u,_i$ is the true rating for movie (i) by user (u).
+$\hat{y}_u,_i$ is the prediction rating.
+
+The target is to reach RMSE less than 0.86490.
+
+**Code provided by the edx staff to download and create *edx* dataset.**
+
+```{r download, message=FALSE, warning=FALSE}
+#Load libraries
+#Create edx set, validation set
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+#Load the data
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+  
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+**1.1 Tha dataset edx**
+
+```{r edxdata, message=FALSE, warning=FALSE, echo=FALSE}
+paste('The edx dataset has', nrow(edx),'rows and', ncol(edx),'columns.')
+```
+
+As we see below, we have six variables **userId**, **movieId**, **rating**, **timestamp**, **titles** and **genres**.
+
+```{r structure, message=FALSE, warning=FALSE}
+str(edx)
+```
+
+
+*Number of unique movies and users in the edx dataset*
+```{r unique_users}
+edx %>% 
+  summarize(
+    n_movies= n_distinct(edx$movieId),
+    n_users=n_distinct(edx$userId),
+    n_genres=n_distinct(edx$genres))
+```
+
+**The dataset modified formats**
+
+The **userId** and **movieId** variables are `numeric` columns in the original data set. These characteristics are just *labels*, therefore they will be converted to *factor* type to be useful.
+
+Both **movieId** and **title** variables give us the same exact information. They are the **unique identification code** to each film. Only the `movieId` colum will remain. It will be a *factor* too.
+
+The **timestamp** variable is converted to *POSIXct* type, to be handle correctly as a `date` vector. The year is extracted to the **year** column and the **timestamp** column is dropped.
+
+```{r formats, message=FALSE}
+edx$userId <- as.factor(edx$userId)#converts 'userId' to factor
+edx$movieId <- as.factor(edx$movieId)#converts 'movieId' to factor
+edx$genres <- as.factor(edx$genres)#converts 'genres' to factor
+edx$timestamp <- as.POSIXct(edx$timestamp, origin = "1970-01-01")#converts 'timestamp' to POSIXct
+edx <- edx %>% 
+  mutate(year = as.numeric(str_sub(title,-5,-2)))#extracts the release year of the movie
+edx <- edx %>%
+  mutate(year_rate=year(timestamp))#extracts the year that the rate was given by the user
+```
+
+
+
+
+
+**1.2 Data Analysis**
+
+*Rating Distribution*
+
+```{r rate_distribution, message=FALSE}
+edx%>%
+  ggplot(aes(rating))+
+  geom_histogram(binwidth=0.25 , fill="magenta")+
+  labs(title = "Rating Distribution",
+       x="Rating",
+       y="Frequency")
+```
+
+In general, we can notice that **4** and **3** ratings have the highest frequency than others.
+Also, half star ratings are less common than whole star ratings.(eg. there are fewer ratings of 3.5 than there are rating of 3 or 4, etc.)
+       
+*Year_rate Distribution*
+```{r year_rate_distribution, message=FALSE}
+edx%>%
+  ggplot(aes(year_rate))+
+  geom_histogram(binwidth=0.35 , fill="blue")+
+  labs(title = " Year_rate Distribution",
+       subtitle = "The year when the rate was given by the user", 
+       x="Year Rate",
+       y= "Frequency")
+```
+
+We can notice that the years of 1997, 1998 and 2009 have the lowest observations. Whereas the years of 1996, 2000 and 2005 have the highest frequency of observations.
+
+*Release_year Distribution*
+```{r release_year_distribution, message=FALSE}
+edx%>%
+  ggplot(aes(year))+
+  geom_histogram(binwidth=0.3 , fill="green")+
+  labs(title = " Release Year Distribution",
+       subtitle = "The year when the movie was created", 
+       x="Release Year",
+       y= "Frequency")
+```
+
+In general, the movies which had been created between the years of (1990 and 2010) are the most liked movie by users. So they have been rating higher than the others.
+
+*The list of the highest five genres rating genres* 
+
+Drama Movies are the most type of movies liked by users as see below:
+
+```{r 5movies_highes_rating_genres, warning=FALSE}
+edx %>% separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))%>%
+  head(5)
+```
+
+*The list of the first ten movies of highest movie rating*
+
+**Pulp Fiction** movie is the highest rating movie with 31336 count.
+
+```{r 10movies_highest_rating, warning=FALSE}
+edx %>% group_by(movieId, title) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))%>%
+  head(10)
+```
+  
+  
+  
+  
+**2. DATA MODELING**
+
+
+**2.1 Train and Test Set**
+
+We will create 'train' and 'test' set.
+
+```{r trai_test_set, message=FALSE, warning=FALSE}
+edx <- edx %>% select(userId, movieId, rating)
+test_index <- createDataPartition(edx$rating, times = 1, p = .2, list = F)
+train <- edx[-test_index, ] # Create Train set
+  test <- edx[test_index, ] # Create Test set
+  test <- test %>% # The same movieId and usersId appears in both set. 
+    semi_join(train, by = "movieId") %>%
+    semi_join(train, by = "userId")
+```
+
+
+
+**2.2 Baseline Model**
+
+The mean of the movie rating effect model 
+`rating` $(\hat{y}_i)$:
+$$\hat{y}_u,_i=\mu+\varepsilon_u,_i$$
+where $\varepsilon$ is independent errors.
+
+```{r baseline, message=FALSE, warning=FALSE}
+mu <- mean(train$rating)
+mu
+```
+
+
+```{r check1, message=FALSE, warning=FALSE}
+#Check the test result
+navie_rmse<-RMSE(test$rating, mu)
+navie_rmse
+```
+
+
+```{r table1, message=FALSE, warning=FALSE}
+#Save the result in table
+rmse_results<- tibble(method="Mean of rating model",RMSE = navie_rmse)
+rmse_results %>% knitr::kable(caption = "RMSE")
+```
+
+
+
+**2.3 The movie effect model**
+
+We are considering the *movie effect* $(b_i)$ as predictors. Therefore, we are generating the next model to predict `rating` $(\hat{y}_i)$:
+$$\hat{y}_u,_i=\mu+b_i+\varepsilon_u,_i$$
+```{r movie_effect, message=FALSE, warning=FALSE}
+movie_mean<- train %>% 
+  group_by(movieId) %>%
+  summarize(b_i= mean(rating-mu))
+```
+
+
+```{r check2, message=FALSE, warning=FALSE}
+#Check the test result
+movie_prediction <- test %>%
+  right_join(movie_mean, by = "movieId")%>%
+  mutate(prediction = mu + b_i)
+
+movie_effect_rmse <- RMSE(test$rating, movie_prediction$prediction)
+movie_effect_rmse
+```
+
+
+```{r table2, message=FALSE, warning=FALSE}
+#Save results in table
+rmse_results <- rmse_results %>%
+  add_row(method="Movie effect model", RMSE = movie_effect_rmse)
+rmse_results %>% knitr::kable()
+```
+
+
+
+**2.4 The User and Movie effect model**
+
+We are considering the *user effect* $(b_u)$ and the *movie effect* $(b_i)$ as predictors. Therefore, we are generating the next model to predict `rating` $(\hat{y}_i)$:
+$$\hat{y}_u,_i=\mu+b_u+b_i+\varepsilon_u,_i$$
+```{r user_movie_effect, message=FALSE, warning=FALSE}
+user_mean <- train %>%
+  left_join(movie_mean, by = "movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating-mu-b_i))
+```
+
+
+```{r check3, message=FALSE, warning=FALSE}
+#Check the test result
+user_prediction <- test %>%
+  left_join(movie_mean, by = "movieId") %>%
+  left_join(user_mean, by = "userId") %>%
+  mutate(prediction = mu+b_i+b_u)
+
+user_effect_rmse <- RMSE(test$rating, user_prediction$prediction)
+user_effect_rmse  
+```
+
+
+```{r table3, message=FALSE, warning=FALSE}
+#Save results in table
+rmse_results <- rmse_results %>%
+  add_row(method = "User & Movie effect model", RMSE = user_effect_rmse)
+rmse_results %>% knitr::kable()
+```
+
+
+
+**2.5 Regularized Movie and User effect model**
+
+The regularisation process will evaluate different values for $\lambda$, delivering to us the corresponding RMSE.
+
+```{r regularization, message=FALSE, warning=FALSE}
+#We use cross-validation to pick the parameter lambda
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(lambda){
+  mu <- mean(train$rating)
+  b_i <- train %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating-mu)/(n()+lambda))
+  b_u <- train %>%
+    left_join(b_i, by = "movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating-b_i-mu)/(n()+lambda))
+  predictions <- test %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu+b_i+b_u) %>%
+    .$pred
+  RMSE(test$rating, predictions)
+})
+```
+
+```{r plot, message=FALSE, warning=FALSE}
+#Plot the lambdas vs RMSEs
+qplot(lambdas, rmses, 
+      main = "Regularized Movie & User Model",
+      xlab = "lambda", ylab = "RMSE")
+
+"According to the plot, the best lambda is:"
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+"And the min RMSE is:"
+min(rmses)
+```
+
+
+```{r table4, message=FALSE, warning=FALSE}
+#Save results in table
+rmse_results <- rmse_results %>%
+  add_row(method = "Regularized Movie & User effect model", RMSE = min(rmses))
+rmse_results %>% knitr::kable()
+```
+
+
+
+**3. RESULTS**
+
+As a result, the smallest RMES value was achieved by Regularized Movie and User effect model with RMSE of 0.8644076 and it is lower than 0.86490, so we achieved the target.
+
+```{r all_results, message=FALSE, warning=FALSE, echo=FALSE}
+rmse_results %>% knitr::kable()
+```
+
+
+
+**4. CONCLUSION**
+
+At the end, a movie recommendation system had been built using Movielens dataset. We trained a machine learning algorithms by following these steps, first: we start with a model that assumes the same rating for all movies and all users. Second: we improved it by adding a term $(b_i)$ that represents the average rating for movie (i). Third: a further improvement for the model was made by adding $(b_u)$, the user-specific effect. Finally, we used *Regularization* on *Movie* and *User* effect model which was the best model with the least RMSE of 0.8644076.
+
